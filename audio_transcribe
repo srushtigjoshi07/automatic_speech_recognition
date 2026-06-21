@@ -1,0 +1,61 @@
+import torch
+import librosa
+from transformers import AutoProcessor, AutoModelForCTC
+
+model_name = "facebook/wav2vec2-base-960h"
+
+processor = AutoProcessor.from_pretrained(model_name)
+model = AutoModelForCTC.from_pretrained(model_name)
+
+# Load audio
+audio, sr = librosa.load("audio.mp3", sr=16000)
+
+chunk_length = 5  # seconds
+samples_per_chunk = chunk_length * sr
+
+chunks = []
+for i in range(0, len(audio), samples_per_chunk):
+    chunks.append(audio[i:i + samples_per_chunk])
+
+results = []
+
+for i, chunk in enumerate(chunks):
+    inputs = processor(chunk, sampling_rate=16000, return_tensors="pt", padding=True)
+
+    with torch.no_grad():
+        logits = model(**inputs).logits
+
+    pred_ids = torch.argmax(logits, dim=-1)
+    text = processor.batch_decode(pred_ids)[0]
+
+    start_time = i * chunk_length
+    end_time = start_time + chunk_length
+
+    results.append((start_time, end_time, text))
+
+    print(f"[{start_time:02d}:{end_time:02d}] {text}")
+def format_time(seconds):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{h:02}:{m:02}:{s:02},000"
+
+with open("subtitles.srt", "w") as f:
+    for i, (start, end, text) in enumerate(results):
+        f.write(f"{i+1}\n")
+        f.write(f"{format_time(start)} --> {format_time(end)}\n")
+        f.write(text + "\n\n")
+
+from moviepy.editor import VideoFileClip
+from moviepy.video.tools.subtitles import SubtitlesClip
+from moviepy.editor import TextClip
+
+video = VideoFileClip("video.mp4")
+
+generator = lambda txt: TextClip(txt, font="Arial", fontsize=24, color="white")
+
+subs = SubtitlesClip("subtitles.srt", generator)
+
+final = video.set_subtitles(subs)
+
+final.write_videofile("output_with_subs.mp4")
